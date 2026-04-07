@@ -15,7 +15,7 @@ import random
 import logging
 import shutil
 import tempfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # 确保能导入同目录模块
@@ -881,6 +881,410 @@ def print_results(all_period_results, dep_city_name):
     print(f"\n> 共找到 **{grand_total}** 条航线\n")
 
 
+# ========== 多人同行模式 ==========
+
+def run_group_search(driver, api_template, travelers, periods, args):
+    """
+    多人同行搜索核心逻辑
+    travelers: [(city_code, city_name), ...]
+    """
+    traveler_names = [name for _, name in travelers]
+    group_label = "+".join(traveler_names)
+
+    all_period_results = {}  # period_name -> [combined_result, ...]
+
+    for i, period in enumerate(periods, 1):
+        period_name = period["name"]
+        depart_dates = period["depart_dates"]
+        trip_days = calculate_trip_days(period)
+
+        logger.info(
+            "=== [%d/%d] %s (出发: %s~%s, 出行: %s~%s天) — 同行: %s ===",
+            i, len(periods), period_name,
+            depart_dates[0], depart_dates[-1],
+            trip_days[0], trip_days[-1], group_label,
+        )
+
+        # 每个出发城市分别搜索
+        city_results = {}  # traveler_name -> {dest_key: result_dict}
+        for idx, (code, name) in enumerate(travelers):
+            if idx > 0:
+                delay = random.uniform(30, 60)
+                logger.info("  等待 %.0f 秒后搜索 %s 出发...", delay, name)
+                time.sleep(delay)
+
+            logger.info("  搜索 %s 出发的航班...", name)
+            results = search_fuzzysearch(driver, api_template, code, name, period)
+
+            # 按目的地索引
+            dest_map = {}
+            for r in (results or []):
+                key = r["city_code"] or r["city_name"]
+                # 同目的地保留最低价
+                if key not in dest_map or r["price"] < dest_map[key]["price"]:
+                    dest_map[key] = r
+            city_results[name] = dest_map
+            logger.info("    → %s: %d 个目的地", name, len(dest_map))
+
+        # 交集：只保留所有人都有航班/本地的目的地
+        # 出发城市=目的地时该人无需机票，也算"有航班"
+        if not city_results:
+            all_period_results[period_name] = []
+            continue
+
+        # 构建出发城市 code/name 集合，用于识别"本地"
+        traveler_home_keys = {}  # traveler_name -> set of possible dest keys matching their city
+        for code, name in travelers:
+            traveler_home_keys[name] = {code, name}  # city_code 或 city_name 都可能是 key
+
+        # 收集所有目的地 key（并集）
+        all_dest_keys = set()
+        for dest_map in city_results.values():
+            all_dest_keys.update(dest_map.keys())
+
+        # 筛选 common_keys：每个人要么有 API 结果，要么目的地就是自己的出发城市
+        common_keys = set()
+        for key in all_dest_keys:
+            is_common = True
+            for code, name in travelers:
+                has_result = key in city_results.get(name, {})
+                is_home = key in traveler_home_keys[name]
+                if not has_result and not is_home:
+                    is_common = False
+                    break
+            if is_common:
+                common_keys.add(key)
+
+        if not common_keys:
+            logger.warning("  无共同目的地")
+            all_period_results[period_name] = []
+            continue
+
+        # 组合结果
+        RAIL_THRESHOLD_KM = 600  # 距离 < 600km 用高铁替代
+        RAIL_PRICE_PER_KM = 0.5  # 高铁估价: 0.5元/km
+
+        combined = []
+        for key in common_keys:
+            traveler_data = {}
+            total_price = 0
+            first_result = None
+            all_have_data = True
+
+            for code, name in travelers:
+                r = city_results.get(name, {}).get(key)
+
+                if not r:
+                    # 检查是否"本地"：出发城市就是目的地
+                    is_home = key in traveler_home_keys[name]
+                    if is_home:
+                        # 从其他人的结果中取目的地基本信息
+                        ref = None
+                        for other_name, dest_map in city_results.items():
+                            if key in dest_map:
+                                ref = dest_map[key]
+                                break
+                        if not ref:
+                            all_have_data = False
+                            break
+                        r = dict(ref)
+                        r["price"] = 0
+                        r["is_local"] = True
+                        r["is_rail"] = False
+                        r["flight_no"] = ""
+                        r["airline"] = ""
+                        r["ret_flight_no"] = ""
+                        r["ret_airline"] = ""
+                        logger.debug("    %s→%s: 出发地=目的地, 票价¥0", name, r["city_name"])
+                    else:
+                        all_have_data = False
+                        break
+
+                if not first_result:
+                    first_result = r
+
+                if not r.get("is_local"):
+                    # 计算出发城市到目的地距离
+                    dep_coord = _CITY_COORDS.get(name)
+                    dest_coord = _CITY_COORDS.get(r["city_name"])
+                    dist = 0
+                    if dep_coord and dest_coord:
+                        dist = _haversine_km(dep_coord[0], dep_coord[1], dest_coord[0], dest_coord[1])
+
+                    if dist > 0 and dist < RAIL_THRESHOLD_KM:
+                        # 高铁替代: 价格 = 0.5 * 距离, 标记为高铁
+                        rail_price = int(RAIL_PRICE_PER_KM * dist)
+                        r = dict(r)  # 浅拷贝避免污染原始数据
+                        r["price"] = rail_price
+                        r["is_rail"] = True
+                        r["rail_dist"] = int(dist)
+                        r["flight_no"] = ""
+                        r["airline"] = ""
+                        r["ret_flight_no"] = ""
+                        r["ret_airline"] = ""
+                        logger.debug("    %s→%s: 距离%.0fkm < %dkm, 改用高铁估价 ¥%d",
+                                     name, r["city_name"], dist, RAIL_THRESHOLD_KM, rail_price)
+                    else:
+                        r = dict(r)
+                        r["is_rail"] = False
+
+                traveler_data[name] = r
+                total_price += r["price"]
+
+            if not all_have_data:
+                continue
+
+            first = first_result
+
+            # 日期交集只看飞行人员（高铁/本地人员时间灵活，不约束日期）
+            # 精确到航班到达时间 ~ 返程起飞时间
+            arrive_times = []   # 飞行人员到达目的地的时间
+            depart_times = []   # 飞行人员从目的地起飞的时间
+            go_dates = []
+            back_dates = []
+
+            # 构建节假日集合（用于计算休假天数）
+            holiday_dates = set()
+            for h in HOLIDAYS:
+                d = h["start"]
+                while d <= h["end"]:
+                    holiday_dates.add(d)
+                    d += timedelta(days=1)
+
+            for name in traveler_names:
+                r = traveler_data[name]
+
+                go_d = None
+                back_d = None
+                if r.get("go_date"):
+                    try:
+                        go_d = date.fromisoformat(r["go_date"])
+                    except (ValueError, TypeError):
+                        pass
+                if r.get("back_date"):
+                    try:
+                        back_d = date.fromisoformat(r["back_date"])
+                    except (ValueError, TypeError):
+                        pass
+
+                if r.get("is_rail") or r.get("is_local"):
+                    continue  # 高铁/本地人员不参与日期/时间交集
+
+                if go_d:
+                    go_dates.append(go_d)
+                if back_d:
+                    back_dates.append(back_d)
+
+                # 精确到达时间（去程航班 arr_time）
+                arr_str = r.get("arr_time", "")
+                if arr_str:
+                    try:
+                        arrive_times.append(datetime.fromisoformat(arr_str))
+                    except (ValueError, TypeError):
+                        pass
+
+                # 精确起飞时间（返程航班 ret_dep_time）
+                ret_dep_str = r.get("ret_dep_time", "")
+                if ret_dep_str:
+                    try:
+                        depart_times.append(datetime.fromisoformat(ret_dep_str))
+                    except (ValueError, TypeError):
+                        pass
+
+            # 交集: 最晚到达 ~ 最早起飞（仅飞行人员）
+            if go_dates and back_dates:
+                latest_go = max(go_dates)
+                earliest_back = min(back_dates)
+                together_days = (earliest_back - latest_go).days
+                if together_days <= 0:
+                    continue  # 飞行人员日期无交集，跳过
+            else:
+                latest_go = None
+                earliest_back = None
+                together_days = first.get("stay_days", 0)
+
+            # 统一请假天数：以飞机人员中最少的为准，所有人共用
+            flyer_leave_list = []
+            for name, r in traveler_data.items():
+                if r.get("is_rail") or r.get("is_local"):
+                    continue
+                go_d = None
+                back_d = None
+                if r.get("go_date"):
+                    try:
+                        go_d = date.fromisoformat(r["go_date"])
+                    except (ValueError, TypeError):
+                        pass
+                if r.get("back_date"):
+                    try:
+                        back_d = date.fromisoformat(r["back_date"])
+                    except (ValueError, TypeError):
+                        pass
+                if go_d and back_d:
+                    leave = 0
+                    d = go_d
+                    while d <= back_d:
+                        if d.weekday() < 5 and d not in holiday_dates:
+                            leave += 1
+                        d += timedelta(days=1)
+                    flyer_leave_list.append(leave)
+            unified_leave = min(flyer_leave_list) if flyer_leave_list else 0
+            for name, r in traveler_data.items():
+                r["personal_leave"] = unified_leave
+
+            # 精确同游时段: 最晚到达时间 ~ 最早返程起飞时间
+            together_start_str = ""
+            together_end_str = ""
+            if arrive_times and depart_times:
+                t_start = max(arrive_times)
+                t_end = min(depart_times)
+                together_start_str = t_start.strftime("%m/%d %H:%M")
+                together_end_str = t_end.strftime("%m/%d %H:%M")
+
+            combined.append({
+                "dest_key": key,
+                "city_name": first["city_name"],
+                "city_code": first["city_code"],
+                "province": first.get("province", ""),
+                "total_price": total_price,
+                "avg_price": total_price // len(travelers),
+                "go_date": str(latest_go) if latest_go else first.get("go_date", ""),
+                "back_date": str(earliest_back) if earliest_back else first.get("back_date", ""),
+                "stay_days": together_days,
+                "together_range": f"{together_start_str}~{together_end_str}" if together_start_str else "-",
+                "tags": first.get("tags", []),
+                "travelers": traveler_data,
+            })
+
+        # 按合计价排序
+        combined.sort(key=lambda x: x["total_price"])
+
+        # 同游天数过滤
+        min_together = getattr(args, "min_together", 2)
+        if min_together > 0:
+            combined = [c for c in combined if c["stay_days"] >= min_together]
+
+        # 价格过滤（合计价）
+        if args.max_price > 0:
+            combined = [c for c in combined if c["total_price"] <= args.max_price]
+
+        logger.info("  共同目的地 %d 个（过滤后 %d 个）", len(common_keys), len(combined))
+        all_period_results[period_name] = combined
+
+    # 输出
+    print_group_results(all_period_results, traveler_names)
+    print_group_detail(all_period_results, traveler_names)
+
+
+def print_group_results(all_period_results, traveler_names):
+    """多人同行 — 简要表格"""
+    total_count = sum(len(v) for v in all_period_results.values())
+    if total_count == 0:
+        print("\n" + "=" * 60)
+        print("未找到多人同行的共同目的地特价机票")
+        print("=" * 60)
+        return
+
+    group_label = "+".join(traveler_names)
+    print(f"\n# 多人同行特价机票 ({group_label})")
+    print(f"\n> 查询时间: {date.today()}")
+
+    grand_total = 0
+    for period_name, combined in all_period_results.items():
+        if not combined:
+            continue
+        grand_total += len(combined)
+
+        # 动态表头：每个出发城市一列
+        price_cols = " | ".join(f"{n}→" for n in traveler_names)
+        header = f"| # | 目的地 | {price_cols} | 合计 | 同游天数 | 同游时段 | 省份 |"
+        sep_cols = " | ".join("------" for _ in traveler_names)
+        separator = f"|---|--------|{sep_cols}|------|---------|----------|------|"
+
+        print(f"\n## {period_name}\n")
+        print(header)
+        print(separator)
+
+        for rank, c in enumerate(combined, 1):
+            price_parts = []
+            for n in traveler_names:
+                r = c["travelers"][n]
+                if r.get("is_local"):
+                    price_parts.append("¥0(本地)")
+                elif r.get("is_rail"):
+                    price_parts.append(f"¥{r['price']}(高铁)")
+                else:
+                    price_parts.append(f"¥{r['price']}")
+            prices = " | ".join(price_parts)
+            stay = f"{c['stay_days']}天" if c["stay_days"] > 0 else "-"
+            together = c.get("together_range", "-")
+            province = c["province"] or "-"
+
+            print(f"| {rank} | {c['city_name']} | {prices} | **¥{c['total_price']}** | {stay} | {together} | {province} |")
+
+    print(f"\n> 共找到 **{grand_total}** 个共同目的地\n")
+
+
+def print_group_detail(all_period_results, traveler_names):
+    """多人同行 — 详细航班信息"""
+    total_count = sum(len(v) for v in all_period_results.values())
+    if total_count == 0:
+        return
+
+    print("---")
+    print("\n# 详细航班信息\n")
+
+    for period_name, combined in all_period_results.items():
+        if not combined:
+            continue
+
+        print(f"\n## {period_name}\n")
+
+        for rank, c in enumerate(combined, 1):
+            print(f"### {rank}. {c['city_name']} — 合计 ¥{c['total_price']}\n")
+
+            for name in traveler_names:
+                r = c["travelers"][name]
+                price = r["price"]
+
+                personal_leave = r.get("personal_leave", 0)
+                leave_str = f"，需请假 {personal_leave} 天" if personal_leave > 0 else "，无需请假"
+
+                if r.get("is_local"):
+                    # 本地人员：出发城市=目的地
+                    print(f"**{name} [本地, 无需出行]{leave_str}**")
+                    print(f"- 已在目的地, 费用 ¥0")
+                    print()
+                    continue
+
+                if r.get("is_rail"):
+                    # 高铁人员
+                    dist = r.get("rail_dist", 0)
+                    print(f"**{name}出发 ¥{price} [高铁估价, 距离{dist}km]{leave_str}**")
+                    print(f"- 高铁往返, 时间灵活")
+                    print()
+                    continue
+
+                # 去程
+                go_flt = f"{r['flight_no']}({r['airline']})" if r.get("flight_no") and r.get("airline") else (r.get("flight_no") or "-")
+                go_t = _fmt_time(r.get("dep_time", "")) or "-"
+                go_dur = _fmt_duration(r.get("duration", 0))
+                go_d = r.get("go_date", "-")
+
+                # 返程
+                ret_no = r.get("ret_flight_no", "")
+                ret_al = r.get("ret_airline", "")
+                ret_flt = f"{ret_no}({ret_al})" if ret_no and ret_al else (ret_no or "-")
+                ret_t = _fmt_time(r.get("ret_dep_time", "")) or "-"
+                ret_dur = _fmt_duration(r.get("ret_duration", 0))
+                back_d = r.get("back_date", "-")
+
+                print(f"**{name}出发 ¥{price}{leave_str}**")
+                print(f"- 去程: {go_d} {go_flt} {go_t} ({go_dur})")
+                print(f"- 返程: {back_d} {ret_flt} {ret_t} ({ret_dur})")
+                print()
+
+
 def print_search_plan(periods, dep_city_name):
     """打印搜索计划"""
     print(f"\n{'═' * 80}")
@@ -917,6 +1321,19 @@ def run(args):
     else:
         dep_city_code, dep_city_name = DEPARTURE_CITY_CODE, DEPARTURE_CITY_NAME
 
+    # 多人同行模式: 解析所有出发城市
+    travelers = None
+    if args.group:
+        city_strs = [c.strip() for c in args.group.split(",") if c.strip()]
+        if len(city_strs) < 2:
+            print("--group 需要至少 2 个出发城市（逗号分隔），如: --group 北京,武汉")
+            return
+        travelers = [resolve_city(c) for c in city_strs]
+        group_label = "+".join(name for _, name in travelers)
+        logger.info("多人同行模式: %s", group_label)
+        # 多人模式下 dep_city_name 用第一个人的（用于搜索计划显示）
+        dep_city_code, dep_city_name = travelers[0]
+
     # 获取出行时段
     if args.dates:
         periods = get_periods_for_dates(args.dates)
@@ -930,7 +1347,11 @@ def run(args):
     if args.next_only or args.test:
         periods = periods[:1]
 
-    print_search_plan(periods, dep_city_name)
+    if travelers:
+        group_label = "+".join(name for _, name in travelers)
+        print_search_plan(periods, group_label)
+    else:
+        print_search_plan(periods, dep_city_name)
 
     # 启动浏览器
     driver = None
@@ -942,57 +1363,58 @@ def run(args):
         api_template = discover_api(driver)
 
         if api_template:
-            logger.info("API 模板捕获成功，将通过 API 重放搜索（出发城市=%s）", dep_city_name)
+            logger.info("API 模板捕获成功")
             if api_template.get("body"):
                 logger.debug("API 请求体: %s", json.dumps(api_template["body"], ensure_ascii=False)[:500])
         else:
-            logger.warning("未捕获到 API 模板，将使用页面导航模式（出发城市取决于页面默认值）")
+            logger.warning("未捕获到 API 模板，将使用页面导航模式")
 
-        # 第 2 步: 逐时段搜索（每个时段只请求一次）
-        all_period_results = {}
+        # 第 2 步: 多人模式 vs 单人模式
+        if travelers:
+            run_group_search(driver, api_template, travelers, periods, args)
+        else:
+            # 原有单人逻辑
+            all_period_results = {}
 
-        for i, period in enumerate(periods, 1):
-            period_name = period["name"]
-            depart_dates = period["depart_dates"]
-            trip_days = calculate_trip_days(period)
+            for i, period in enumerate(periods, 1):
+                period_name = period["name"]
+                depart_dates = period["depart_dates"]
+                trip_days = calculate_trip_days(period)
 
-            logger.info(
-                "=== [%d/%d] %s (出发: %s~%s, 出行: %s~%s天) ===",
-                i, len(periods), period_name,
-                depart_dates[0], depart_dates[-1],
-                trip_days[0], trip_days[-1],
-            )
-
-            # 每个假期只请求一次
-            results = search_fuzzysearch(
-                driver, api_template,
-                dep_city_code, dep_city_name,
-                period,
-            )
-
-            if results:
-                # 统一过滤
-                results = filter_results(
-                    results,
-                    max_price=args.max_price,
-                    min_price=args.min_price,
-                    min_stay=args.min_stay,
-                    max_stay=args.max_stay,
-                    dep_city_name=dep_city_name,
-                    min_dist=args.min_dist,
-                    max_dist=args.max_dist,
-                    min_flight_time=args.min_flight_time,
-                    max_flight_time=args.max_flight_time,
+                logger.info(
+                    "=== [%d/%d] %s (出发: %s~%s, 出行: %s~%s天) ===",
+                    i, len(periods), period_name,
+                    depart_dates[0], depart_dates[-1],
+                    trip_days[0], trip_days[-1],
                 )
-                logger.info("    → 过滤后 %d 条航线数据", len(results))
-            else:
-                logger.warning("    → 未获取到数据")
 
-            all_period_results[period_name] = results
-            logger.info("=== %s 搜索完成, 共 %d 条数据 ===\n", period_name, len(results))
+                results = search_fuzzysearch(
+                    driver, api_template,
+                    dep_city_code, dep_city_name,
+                    period,
+                )
 
-        # 输出结果
-        print_results(all_period_results, dep_city_name)
+                if results:
+                    results = filter_results(
+                        results,
+                        max_price=args.max_price,
+                        min_price=args.min_price,
+                        min_stay=args.min_stay,
+                        max_stay=args.max_stay,
+                        dep_city_name=dep_city_name,
+                        min_dist=args.min_dist,
+                        max_dist=args.max_dist,
+                        min_flight_time=args.min_flight_time,
+                        max_flight_time=args.max_flight_time,
+                    )
+                    logger.info("    → 过滤后 %d 条航线数据", len(results))
+                else:
+                    logger.warning("    → 未获取到数据")
+
+                all_period_results[period_name] = results
+                logger.info("=== %s 搜索完成, 共 %d 条数据 ===\n", period_name, len(results))
+
+            print_results(all_period_results, dep_city_name)
 
     except KeyboardInterrupt:
         print("\n\n用户中断搜索 (Ctrl+C)")

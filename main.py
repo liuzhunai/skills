@@ -45,6 +45,14 @@ def build_parser():
         help=f"出发城市名或三字码 (默认: {DEPARTURE_CITY_NAME})，如: --from 上海",
     )
     dp.add_argument(
+        "--group", type=str, default=None,
+        help="多人同行模式: 逗号分隔的出发城市, 如 --group 北京,武汉,上海",
+    )
+    dp.add_argument(
+        "--min-together", type=int, default=2,
+        help="多人同行最小同游天数 (默认: 2)",
+    )
+    dp.add_argument(
         "--holidays-only", action="store_true",
         help="只搜索法定节假日，不搜索普通周末",
     )
