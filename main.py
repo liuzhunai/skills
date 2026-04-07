@@ -73,6 +73,24 @@ def build_parser():
         "--max-stay", type=int, default=MAX_STAY_DAYS,
         help=f"最多游玩天数过滤, 0=不过滤 (默认: {MAX_STAY_DAYS})",
     )
+    # 距离过滤
+    dp.add_argument(
+        "--min-dist", type=int, default=0,
+        help="目的地最小距离(km), 0=不过滤",
+    )
+    dp.add_argument(
+        "--max-dist", type=int, default=0,
+        help="目的地最大距离(km), 0=不过滤",
+    )
+    # 飞行时长过滤
+    dp.add_argument(
+        "--min-flight-time", type=int, default=0,
+        help="单程最短飞行时长(分钟), 0=不过滤",
+    )
+    dp.add_argument(
+        "--max-flight-time", type=int, default=0,
+        help="单程最长飞行时长(分钟), 0=不过滤",
+    )
     # 运行模式
     dp.add_argument("--test", action="store_true", help="测试模式: 只搜索1个时段")
     dp.add_argument("--debug", action="store_true", help="显示调试日志")

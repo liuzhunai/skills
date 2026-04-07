@@ -10,6 +10,7 @@ import sys
 import os
 import json
 import time
+import math
 import random
 import logging
 import shutil
@@ -691,13 +692,20 @@ def _parse_single_route(route, sdate):
     }
 
 
-def filter_results(results, max_price=0, min_price=0, min_stay=0, max_stay=0):
+def filter_results(results, max_price=0, min_price=0, min_stay=0, max_stay=0,
+                    dep_city_name="", min_dist=0, max_dist=0,
+                    min_flight_time=0, max_flight_time=0):
     """
     统一过滤搜索结果
     - max_price: 最高价格（0=不过滤）
     - min_price: 最低价格（0=不过滤）
     - min_stay: 最少游玩天数（0=不过滤）
     - max_stay: 最多游玩天数（0=不过滤）
+    - dep_city_name: 出发城市名（距离过滤需要）
+    - min_dist: 最小距离km（0=不过滤）
+    - max_dist: 最大距离km（0=不过滤）
+    - min_flight_time: 最短飞行时长分钟（0=不过滤）
+    - max_flight_time: 最长飞行时长分钟（0=不过滤）
     """
     filtered = results
 
@@ -713,6 +721,73 @@ def filter_results(results, max_price=0, min_price=0, min_stay=0, max_stay=0):
     if max_stay > 0:
         filtered = [r for r in filtered if 0 < r["stay_days"] <= max_stay]
 
+    # 距离过滤
+    if (min_dist > 0 or max_dist > 0) and dep_city_name:
+        filtered = _filter_by_distance(filtered, dep_city_name, min_dist, max_dist)
+
+    # 飞行时长过滤（去程 duration）
+    if min_flight_time > 0:
+        filtered = [r for r in filtered if r.get("duration", 0) >= min_flight_time]
+    if max_flight_time > 0:
+        filtered = [r for r in filtered if 0 < r.get("duration", 0) <= max_flight_time]
+
+    return filtered
+
+
+# 城市坐标（复用 monitor 模块数据）
+_CITY_COORDS = {
+    "北京": (39.90, 116.41), "上海": (31.23, 121.47), "广州": (23.13, 113.26),
+    "深圳": (22.54, 114.06), "成都": (30.57, 104.07), "杭州": (30.27, 120.15),
+    "武汉": (30.59, 114.31), "西安": (34.26, 108.94), "重庆": (29.56, 106.55),
+    "南京": (32.06, 118.80), "天津": (39.13, 117.20), "长沙": (28.23, 112.94),
+    "沈阳": (41.80, 123.43), "哈尔滨": (45.75, 126.65), "大连": (38.91, 121.60),
+    "济南": (36.65, 116.99), "青岛": (36.07, 120.38), "郑州": (34.75, 113.65),
+    "昆明": (25.04, 102.71), "厦门": (24.48, 118.09), "合肥": (31.82, 117.23),
+    "南昌": (28.68, 115.86), "福州": (26.07, 119.31), "太原": (37.87, 112.55),
+    "南宁": (22.82, 108.32), "贵阳": (26.65, 106.63), "海口": (20.04, 110.35),
+    "三亚": (18.25, 109.50), "兰州": (36.06, 103.83), "乌鲁木齐": (43.83, 87.62),
+    "呼和浩特": (40.84, 111.75), "石家庄": (38.04, 114.51), "长春": (43.88, 125.32),
+    "拉萨": (29.65, 91.13), "银川": (38.49, 106.23), "西宁": (36.62, 101.78),
+    "宁波": (29.87, 121.55), "温州": (28.00, 120.67), "烟台": (37.46, 121.45),
+    "威海": (37.51, 122.12), "泉州": (24.87, 118.68), "珠海": (22.27, 113.58),
+    "北海": (21.47, 109.12), "桂林": (25.27, 110.29), "丽江": (26.87, 100.23),
+    "洛阳": (34.62, 112.45), "宜昌": (30.69, 111.29), "岳阳": (29.36, 113.09),
+    "揭阳": (23.55, 116.37), "绵阳": (31.47, 104.74), "赤峰": (42.26, 118.96),
+    "连云港": (34.60, 119.22), "通辽": (43.65, 122.26), "满洲里": (49.60, 117.38),
+    "包头": (40.66, 109.84), "鄂尔多斯": (39.61, 109.78), "锡林浩特": (43.97, 116.09),
+    "嘉峪关": (39.77, 98.29), "临沂": (35.10, 118.36), "柳州": (24.33, 109.41),
+    "武夷山": (27.76, 118.04), "湛江": (21.27, 110.36),
+}
+
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    """计算两个坐标之间的大圆距离（公里）"""
+    R = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+def _filter_by_distance(results, dep_city_name, min_dist, max_dist):
+    """按城市距离过滤结果"""
+    dep_coord = _CITY_COORDS.get(dep_city_name)
+    if not dep_coord:
+        return results
+    filtered = []
+    for r in results:
+        coord = _CITY_COORDS.get(r["city_name"])
+        if not coord:
+            filtered.append(r)  # 未知坐标的城市保留
+            continue
+        dist = _haversine_km(dep_coord[0], dep_coord[1], coord[0], coord[1])
+        if min_dist > 0 and dist < min_dist:
+            logger.info("  排除 %s (距%s %.0f km < %d km)", r["city_name"], dep_city_name, dist, min_dist)
+            continue
+        if max_dist > 0 and dist > max_dist:
+            logger.info("  排除 %s (距%s %.0f km > %d km)", r["city_name"], dep_city_name, dist, max_dist)
+            continue
+        filtered.append(r)
     return filtered
 
 
@@ -769,8 +844,8 @@ def print_results(all_period_results, dep_city_name):
         grand_total += len(results)
 
         print(f"\n## {period_name}\n")
-        print("| # | 目的地 | 省份 | 最低价 | 去程日期 | 去程航班 | 起飞 | 时长 | 返程日期 | 返程航班 | 起飞 | 时长 | 游玩天数 | 休假天数 | 景点推荐 |")
-        print("|---|--------|------|-------|----------|---------|------|------|----------|---------|------|------|---------|---------|---------|")
+        print("| # | 目的地 | 最低价 | 游玩天数 | 休假天数 | 去程日期 | 起飞 | 返程日期 | 起飞 | 去程航班 | 时长 | 返程航班 | 时长 | 省份 | 景点推荐 |")
+        print("|---|--------|-------|---------|---------|----------|------|----------|------|---------|------|---------|------|------|---------|")
 
         for rank, r in enumerate(results, 1):
             city = r["city_name"]
@@ -801,7 +876,7 @@ def print_results(all_period_results, dep_city_name):
             leave_str = f"{leave}天" if leave > 0 else "0"
             tags = ", ".join(r["tags"][:2]) if r["tags"] else "-"
 
-            print(f"| {rank} | {city} | {province} | **{price_str}** | {go_d} | {go_flt} | {go_t} | {go_dur} | {back_d} | {ret_flt} | {ret_t} | {ret_dur} | {stay_str} | {leave_str} | {tags} |")
+            print(f"| {rank} | {city} | **{price_str}** | {stay_str} | {leave_str} | {go_d} | {go_t} | {back_d} | {ret_t} | {go_flt} | {go_dur} | {ret_flt} | {ret_dur} | {province} | {tags} |")
 
     print(f"\n> 共找到 **{grand_total}** 条航线\n")
 
@@ -903,6 +978,11 @@ def run(args):
                     min_price=args.min_price,
                     min_stay=args.min_stay,
                     max_stay=args.max_stay,
+                    dep_city_name=dep_city_name,
+                    min_dist=args.min_dist,
+                    max_dist=args.max_dist,
+                    min_flight_time=args.min_flight_time,
+                    max_flight_time=args.max_flight_time,
                 )
                 logger.info("    → 过滤后 %d 条航线数据", len(results))
             else:
