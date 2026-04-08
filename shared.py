@@ -167,6 +167,28 @@ def fmt_duration(minutes):
     return f"{h}h{m:02d}m" if h else f"{m}m"
 
 
+def fmt_datetime_short(date_str, time_str=""):
+    """合并日期+时间为 'MM/DD HH:MM' 格式，如 '04/11 09:55'
+    date_str: '2026-04-11' 或含日期的字符串
+    time_str: '2026-04-16 08:25:00' 或 HH:MM，若为空则从 date_str 不提取时间
+    """
+    if not date_str:
+        return "-"
+    try:
+        # 解析日期部分 (取 date_str 的前 10 字符 YYYY-MM-DD)
+        d = date_str[:10]
+        month = d[5:7].lstrip("0") or "0"
+        day = d[8:10].lstrip("0") or "0"
+        md = f"{month.zfill(2)}/{day.zfill(2)}"
+    except (IndexError, ValueError):
+        return "-"
+    # 解析时间部分
+    t = fmt_time(time_str) if time_str else ""
+    if t:
+        return f"{md} {t}"
+    return md
+
+
 def fmt_time(dt_str):
     """从 '2026-04-16 08:25:00' 提取 '08:25'"""
     if not dt_str:

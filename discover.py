@@ -66,7 +66,7 @@ def run(args):
         print("未找到需要搜索的出行时段。")
         return
 
-    if args.next_only or args.test:
+    if not args.search_all or args.test:
         periods = periods[:1]
 
     # 国际航班模式: 解析 --abroad 参数

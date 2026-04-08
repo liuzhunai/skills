@@ -58,8 +58,8 @@ def build_parser():
         help="只搜索法定节假日，不搜索普通周末",
     )
     dp.add_argument(
-        "--next", dest="next_only", action="store_true",
-        help="只搜索最近的一个假期/周末",
+        "--all", dest="search_all", action="store_true",
+        help="搜索所有假期/周末（默认只搜最近一个）",
     )
     dp.add_argument(
         "--dates", type=str, default=None,
@@ -131,8 +131,8 @@ def build_parser():
         help="只搜索法定节假日，不搜索普通周末",
     )
     mp.add_argument(
-        "--next", dest="next_only", action="store_true",
-        help="只搜索最近的一个假期/周末",
+        "--all", dest="search_all", action="store_true",
+        help="搜索所有假期/周末（默认只搜最近一个）",
     )
     mp.add_argument(
         "--dates", type=str, default=None,

@@ -8,7 +8,7 @@ from datetime import date
 
 from config import PAGE_LOAD_WAIT, REQUEST_DELAY
 from date_utils import calculate_trip_days
-from shared import fmt_duration, fmt_time
+from shared import fmt_duration, fmt_time, fmt_datetime_short
 from discover_parse import deduplicate_results
 
 logger = logging.getLogger(__name__)
@@ -51,22 +51,20 @@ def print_results(all_period_results, dep_city_name):
         grand_total += len(results)
 
         print(f"\n## {period_name}\n")
-        print("| # | 目的地 | 最低价 | 游玩天数 | 休假天数 | 去程日期 | 起飞 | 返程日期 | 起飞 | 去程航班 | 时长 | 返程航班 | 时长 | 省份 | 景点推荐 |")
-        print("|---|--------|-------|---------|---------|----------|------|----------|------|---------|------|---------|------|------|---------|")
+        print("| # | 目的地 | 最低价 | 游玩天数 | 休假天数 | 去程 | 返程 | 去程航班 | 时长 | 返程航班 | 时长 | 省份 | 景点推荐 |")
+        print("|---|--------|-------|---------|---------|------|------|---------|------|---------|------|------|---------|")
 
         for rank, r in enumerate(results, 1):
             city = r["city_name"]
             province = r["province"] or "-"
             price_str = f"¥{r['price']}" if r["price"] > 0 else "-"
             # 去程
-            go_d = r["go_date"] or "-"
+            go_dt = fmt_datetime_short(r["go_date"], r["dep_time"])
             go_flt = _format_flight_cell(r["flight_no"], r["airline"])
-            go_t = fmt_time(r["dep_time"]) or "-"
             go_dur = fmt_duration(r["duration"])
             # 返程
-            back_d = r.get("back_date", "") or "-"
+            back_dt = fmt_datetime_short(r.get("back_date", ""), r.get("ret_dep_time", ""))
             ret_flt = _format_flight_cell(r.get("ret_flight_no", ""), r.get("ret_airline", ""))
-            ret_t = fmt_time(r.get("ret_dep_time", "")) or "-"
             ret_dur = fmt_duration(r.get("ret_duration", 0))
             # 游玩天数
             stay = r.get("stay_days", 0)
@@ -75,7 +73,7 @@ def print_results(all_period_results, dep_city_name):
             leave_str = f"{leave}天" if leave > 0 else "0"
             tags = ", ".join(r["tags"][:2]) if r["tags"] else "-"
 
-            print(f"| {rank} | {city} | **{price_str}** | {stay_str} | {leave_str} | {go_d} | {go_t} | {back_d} | {ret_t} | {go_flt} | {go_dur} | {ret_flt} | {ret_dur} | {province} | {tags} |")
+            print(f"| {rank} | {city} | **{price_str}** | {stay_str} | {leave_str} | {go_dt} | {back_dt} | {go_flt} | {go_dur} | {ret_flt} | {ret_dur} | {province} | {tags} |")
 
     print(f"\n> 共找到 **{grand_total}** 条航线\n")
 
@@ -171,19 +169,17 @@ def print_group_detail(all_period_results, traveler_names):
 
                 # 去程
                 go_flt = _format_flight_cell(r.get("flight_no", ""), r.get("airline", ""))
-                go_t = fmt_time(r.get("dep_time", "")) or "-"
+                go_dt = fmt_datetime_short(r.get("go_date", ""), r.get("dep_time", ""))
                 go_dur = fmt_duration(r.get("duration", 0))
-                go_d = r.get("go_date", "-")
 
                 # 返程
                 ret_flt = _format_flight_cell(r.get("ret_flight_no", ""), r.get("ret_airline", ""))
-                ret_t = fmt_time(r.get("ret_dep_time", "")) or "-"
+                back_dt = fmt_datetime_short(r.get("back_date", ""), r.get("ret_dep_time", ""))
                 ret_dur = fmt_duration(r.get("ret_duration", 0))
-                back_d = r.get("back_date", "-")
 
                 print(f"**{name}出发 ¥{price}{leave_str}**")
-                print(f"- 去程: {go_d} {go_flt} {go_t} ({go_dur})")
-                print(f"- 返程: {back_d} {ret_flt} {ret_t} ({ret_dur})")
+                print(f"- 去程: {go_dt} {go_flt} ({go_dur})")
+                print(f"- 返程: {back_dt} {ret_flt} ({ret_dur})")
                 print()
 
 
@@ -207,24 +203,25 @@ def print_abroad_results(all_period_results, dep_city_name, country_names):
         grand_total += len(results)
 
         print(f"\n## {period_name}\n")
-        print("| # | 国家/地区 | 目的地 | 最低价 | 游玩天数 | 去程日期 | 起飞 | 返程日期 | 起飞 | 去程航班 | 时长 | 返程航班 | 时长 |")
-        print("|---|----------|--------|-------|---------|---------|------|---------|------|---------|------|---------|------|")
+        print("| # | 目的地 | 最低价 | 游玩天数 | 休假天数 | 去程 | 返程 | 去程航班 | 时长 | 返程航班 | 时长 | 国家/地区 | 景点推荐 |")
+        print("|---|--------|-------|---------|---------|------|------|---------|------|---------|------|----------|---------|")
 
         for rank, r in enumerate(results, 1):
             city = r["city_name"]
             country = r.get("province") or "-"
             price = f"¥{r['price']}"
             stay = f"{r['stay_days']}天" if r.get("stay_days") else "-"
-            go_d = r.get("go_date", "-")
-            go_t = fmt_time(r.get("dep_time", "")) or "-"
-            back_d = r.get("back_date", "-")
-            ret_t = fmt_time(r.get("ret_dep_time", "")) or "-"
+            leave = r.get("leave_days", 0)
+            leave_str = f"{leave}天" if leave > 0 else "0"
+            go_dt = fmt_datetime_short(r.get("go_date", ""), r.get("dep_time", ""))
+            back_dt = fmt_datetime_short(r.get("back_date", ""), r.get("ret_dep_time", ""))
             go_flt = _format_flight_cell(r.get("flight_no", ""), r.get("airline", ""))
             go_dur = fmt_duration(r.get("duration", 0))
             ret_flt = _format_flight_cell(r.get("ret_flight_no", ""), r.get("ret_airline", ""))
             ret_dur = fmt_duration(r.get("ret_duration", 0))
+            tags = ", ".join(r["tags"][:2]) if r.get("tags") else "-"
 
-            print(f"| {rank} | {country} | {city} | {price} | {stay} | {go_d} | {go_t} | {back_d} | {ret_t} | {go_flt} | {go_dur} | {ret_flt} | {ret_dur} |")
+            print(f"| {rank} | {city} | {price} | {stay} | {leave_str} | {go_dt} | {back_dt} | {go_flt} | {go_dur} | {ret_flt} | {ret_dur} | {country} | {tags} |")
 
     print(f"\n> 共找到 **{grand_total}** 条国际特价航线\n")
 
