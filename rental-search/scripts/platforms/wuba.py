@@ -16,6 +16,11 @@ class WubaAdapter(PlatformAdapter):
     NAME = "wuba"
     DISPLAY_NAME = "58同城"
 
+    # 房源类型：0=个人房源，1=经纪人房源
+    # 本适配器只搜索个人房源
+    PERSONAL_LISTING = "0"
+    AGENT_LISTING = "1"
+
     # 价格区间映射
     PRICE_MAPPING = {
         (0, 1000): 9,
@@ -55,12 +60,16 @@ class WubaAdapter(PlatformAdapter):
         return urls
 
     def _build_single_url(self, params: SearchParams, district_url: str) -> str:
-        """构建单个搜索URL"""
+        """构建单个搜索URL
+
+        注意：/0/ 表示个人房源，/1/ 表示经纪人房源
+        本方法固定使用 /0/，确保只搜索个人房源
+        """
         # 根据租赁方式选择路径
         path = "hezu" if params.rental_type == "合租" else "zufang"
 
-        # 基础URL
-        url = f"https://{params.city_code}.58.com/{district_url}/{path}/0/"
+        # 基础URL - /0/ 表示个人房源
+        url = f"https://{params.city_code}.58.com/{district_url}/{path}/{self.PERSONAL_LISTING}/"
 
         # 添加户型过滤
         if params.rooms:
@@ -164,11 +173,33 @@ class WubaAdapter(PlatformAdapter):
 
     @classmethod
     def get_javascript_extractor(cls) -> str:
-        """获取用于浏览器自动化的JavaScript提取代码"""
+        """获取用于浏览器自动化的JavaScript提取代码
+
+        过滤规则：
+        1. 排除包含"经纪人"、"中介"、"代理"等关键词的房源
+        2. 排除带有经纪人标识的房源（如 class 包含 agent）
+        3. 只保留个人房源
+        """
         return """
         Array.from(document.querySelectorAll("li")).filter(li => {
             const h2 = li.querySelector("h2");
-            return h2 && (h2.textContent.includes("整租") || h2.textContent.includes("合租"));
+            if (!h2) return false;
+            
+            const title = h2.textContent.trim();
+            
+            // 必须包含整租或合租
+            if (!title.includes("整租") && !title.includes("合租")) return false;
+            
+            // 排除经纪人房源关键词
+            const text = li.innerText;
+            const agentKeywords = ["经纪人", "中介", "代理", "房产经纪", "置业顾问"];
+            if (agentKeywords.some(kw => text.includes(kw))) return false;
+            
+            // 排除带有经纪人标识的元素
+            const agentTag = li.querySelector(".agent, .broker, [class*='agent'], [class*='broker']");
+            if (agentTag) return false;
+            
+            return true;
         }).map(li => {
             const h2 = li.querySelector("h2");
             const title = h2 ? h2.textContent.trim() : "";
@@ -182,13 +213,23 @@ class WubaAdapter(PlatformAdapter):
             const img = li.querySelector("img");
             const imageUrl = img ? (img.src || img.dataset.src) : "";
             
+            // 提取租赁类型
+            const rentalType = title.includes("合租") ? "合租" : "整租";
+            
+            // 提取小区名称（通常在标题中）
+            const communityMatch = title.match(/(?:整租|合租)\\s*[-·]?\\s*(.+?)\\s*\\d室/);
+            const community = communityMatch ? communityMatch[1].trim() : "";
+            
             return {
                 title: title,
                 url: url,
                 price: price,
                 area: area,
                 image_url: imageUrl,
-                platform: "wuba"
+                rental_type: rentalType,
+                community: community,
+                platform: "wuba",
+                is_personal: true  // 标记为个人房源
             };
         });
         """
