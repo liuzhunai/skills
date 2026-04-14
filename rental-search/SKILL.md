@@ -182,9 +182,9 @@ result = engine.search("百度科技园附近5km的房源")
 - 筛选距离 ≤ 半径 + 10km 的区域（留余量）
 - 按距离排序
 
-### 4. 搜索房源
+### 4. 生成搜索配置
 
-使用 `dumate-browser-use` skill 访问房源平台。
+本 Skill 生成搜索 URL 和数据提取代码，**网页抓取由调用方负责**。
 
 **58同城 URL构建规则:**
 ```
@@ -215,9 +215,9 @@ https://{city_code}.58.com/{district}/hezu/0/{filters}/    # 合租
 /j3/ = 三室
 ```
 
-### 5. 提取房源数据
+### 5. 数据提取代码
 
-使用JavaScript在页面中提取数据:
+本 Skill 提供可在浏览器中执行的 JavaScript 提取代码:
 
 ```javascript
 // 58同城数据提取脚本 (WubaAdapter.get_javascript_extractor())
@@ -228,6 +228,8 @@ Array.from(document.querySelectorAll("li")).filter(li => {
   // 提取房源信息...
 });
 ```
+
+完整代码见 `scripts/platforms/wuba.py` 中的 `get_javascript_extractor()` 方法。
 
 ### 6. 过滤与排序
 
@@ -260,11 +262,24 @@ Array.from(document.querySelectorAll("li")).filter(li => {
 | 发布时间 | 房源发布日期 |
 | 链接 | 房源详情页URL |
 
-## 依赖Skills
+## 使用说明
 
-- `dumate-browser-use`: 网页抓取
-- `baidu-map-webapi`: 地理定位（可选，可使用预设坐标）
-- `xlsx`: Excel生成
+本 Skill 提供搜索配置生成功能：
+- 解析自然语言查询参数
+- 生成搜索 URL（已包含个人房源过滤）
+- 提供数据提取 JavaScript 代码
+- 支持距离计算和结果过滤
+- 生成 Excel 报告
+
+**网页抓取**需要调用方自行实现，可使用：
+- `dumate-browser-use` skill
+- 其他浏览器自动化工具
+- 直接 HTTP 请求（需处理反爬）
+
+## 可选依赖
+
+- `baidu-map-webapi`: 地理定位（未配置时使用预设坐标）
+- `xlsx`: Excel 生成（使用 openpyxl）
 
 ## 注意事项
 
