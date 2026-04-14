@@ -26,7 +26,10 @@ class SearchParams:
     days: int = 15
     price_min: Optional[int] = None
     price_max: Optional[int] = None
+    area_min: Optional[float] = None  # 最小面积
+    area_max: Optional[float] = None  # 最大面积
     rooms: Optional[int] = None  # 1=一居, 2=两居, 3=三居
+    rental_type: Optional[str] = None  # "整租" 或 "合租"
     city: str = "北京"
     city_code: str = "bj"
 
@@ -166,6 +169,18 @@ def parse_query(query: str) -> SearchParams:
         if price_max_match:
             params.price_max = int(price_max_match.group(1))
 
+    # 提取面积区间（支持：面积30-50、30-50平、50平以内、50平米以下）
+    area_match = re.search(
+        r"面积?(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)\s*(?:平|平米)?", query
+    )
+    if area_match:
+        params.area_min = float(area_match.group(1))
+        params.area_max = float(area_match.group(2))
+    else:
+        area_max_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:平|平米)\s*以[内下]", query)
+        if area_max_match:
+            params.area_max = float(area_max_match.group(1))
+
     # 提取户型
     if "一居" in query or "一室" in query or "开间" in query:
         params.rooms = 1
@@ -174,12 +189,24 @@ def parse_query(query: str) -> SearchParams:
     elif "三居" in query or "三室" in query:
         params.rooms = 3
 
+    # 提取租赁方式
+    if "整租" in query:
+        params.rental_type = "整租"
+    elif "合租" in query:
+        params.rental_type = "合租"
+
     # 提取地点关键词
     location_query = query
     location_query = re.sub(r"(\d+(?:\.\d+)?)\s*(km|公里|米|m)", "", location_query)
     location_query = re.sub(r"(\d+)\s*天[内以]?", "", location_query)
     location_query = re.sub(r"价格?(\d+)-(\d+)", "", location_query)
     location_query = re.sub(r"(\d+)以[内下]", "", location_query)
+    location_query = re.sub(
+        r"面积?(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)\s*(?:平|平米)?", "", location_query
+    )
+    location_query = re.sub(
+        r"(\d+(?:\.\d+)?)\s*(?:平|平米)\s*以[内下]", "", location_query
+    )
     location_query = re.sub(
         r"(一居|两居|三居|一室|两室|三室|开间|整租|合租)", "", location_query
     )
@@ -231,10 +258,30 @@ def build_search_url(
     price_min: int = None,
     price_max: int = None,
     rooms: int = None,
+    rental_type: str = None,
     page: int = 1,
 ) -> str:
-    """构建58同城搜索URL（个人房源）"""
-    url = f"https://{city_code}.58.com/{district_url}/chuzu/0/"
+    """构建58同城搜索URL（个人房源）
+
+    Args:
+        city_code: 城市代码 (如 bj=北京)
+        district_url: 区域URL名 (如 haidian=海淀)
+        price_min: 最低价格
+        price_max: 最高价格
+        rooms: 户型 (1=一居, 2=两居, 3=三居)
+        rental_type: 租赁方式 ("整租" 或 "合租")
+        page: 页码
+
+    Returns:
+        58同城搜索URL
+    """
+    # 根据租赁方式选择URL路径
+    if rental_type == "合租":
+        path = "hezu"
+    else:
+        path = "zufang"
+
+    url = f"https://{city_code}.58.com/{district_url}/{path}/0/"
 
     if rooms:
         url = url.rstrip("/") + f"/j{rooms}/"
@@ -292,9 +339,26 @@ def find_nearest_subway(
 
 
 def filter_listings_by_distance(
-    raw_listings: List[Dict], target_lat: float, target_lng: float, radius_km: float
+    raw_listings: List[Dict],
+    target_lat: float,
+    target_lng: float,
+    radius_km: float,
+    area_min: float = None,
+    area_max: float = None,
 ) -> List[Dict]:
-    """按距离过滤房源"""
+    """按距离和面积过滤房源
+
+    Args:
+        raw_listings: 原始房源列表
+        target_lat: 目标纬度
+        target_lng: 目标经度
+        radius_km: 搜索半径(km)
+        area_min: 最小面积(㎡)
+        area_max: 最大面积(㎡)
+
+    Returns:
+        过滤后的房源列表，按距离排序
+    """
     filtered = []
     for listing in raw_listings:
         location_text = listing.get("location", "")
@@ -302,6 +366,16 @@ def filter_listings_by_distance(
         if coords:
             distance = calculate_distance(target_lat, target_lng, coords[0], coords[1])
             if distance <= radius_km:
+                # 面积过滤
+                area_str = listing.get("area", "")
+                area_match = re.search(r"(\d+(?:\.\d+)?)", str(area_str))
+                if area_match:
+                    area = float(area_match.group(1))
+                    if area_min and area < area_min:
+                        continue
+                    if area_max and area > area_max:
+                        continue
+
                 listing["distance"] = round(distance, 2)
                 # 查找最近地铁站
                 nearest_subway = find_nearest_subway(coords[0], coords[1])
@@ -430,6 +504,7 @@ def main():
             params.price_min,
             params.price_max,
             params.rooms,
+            params.rental_type,
         )
         search_urls.append(
             {"district": district["name"], "url": url, "distance": district["distance"]}
