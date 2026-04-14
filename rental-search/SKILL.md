@@ -40,13 +40,119 @@
 | 户型 | 匹配 `一居|两居|三居|开间` | 不限 |
 | 租赁方式 | 匹配 `整租|合租` | 不限 |
 
+## 架构设计
+
+### 模块结构
+
+```
+scripts/
+├── __init__.py          # 包入口
+├── main.py              # 主程序入口
+├── config.py            # 配置管理(单例模式)
+├── models/
+│   ├── __init__.py
+│   ├── params.py        # SearchParams 数据类
+│   └── listing.py       # Listing 数据类
+├── parsers/
+│   ├── __init__.py
+│   ├── base.py          # 解析器基类
+│   └── query_parser.py  # 查询解析器(责任链模式)
+├── platforms/
+│   ├── __init__.py
+│   ├── base.py          # 平台适配器基类(策略模式)
+│   ├── wuba.py          # 58同城实现
+│   └── factory.py       # 平台工厂(工厂模式)
+├── geo/
+│   ├── __init__.py
+│   ├── distance.py      # 距离计算
+│   ├── location.py      # 地点服务
+│   └── subway.py        # 地铁站服务
+└── exporters/
+    ├── __init__.py
+    ├── base.py          # 导出器基类
+    └── excel_exporter.py # Excel导出
+```
+
+### 设计模式
+
+| 模式 | 应用场景 | 实现位置 |
+|------|----------|----------|
+| 责任链模式 | 查询参数解析 | `parsers/query_parser.py` |
+| 策略模式 | 平台适配器 | `platforms/base.py` |
+| 工厂模式 | 平台创建 | `platforms/factory.py` |
+| 单例模式 | 配置管理 | `config.py` |
+| 数据类模式 | 数据模型 | `models/` |
+
+### 扩展新平台
+
+1. 创建平台适配器，继承 `PlatformAdapter`:
+
+```python
+from platforms.base import PlatformAdapter, SearchURL
+from models.params import SearchParams
+
+class LianjiaAdapter(PlatformAdapter):
+    NAME = "lianjia"
+    DISPLAY_NAME = "链家"
+    
+    def build_search_urls(self, params: SearchParams, districts: List[Dict]) -> List[SearchURL]:
+        # 实现URL构建逻辑
+        pass
+    
+    def parse_list_page(self, html: str) -> List[Dict]:
+        # 实现列表页解析
+        pass
+    
+    def parse_detail_page(self, html: str, url: str) -> Dict:
+        # 实现详情页解析
+        pass
+    
+    def supports_rental_type(self, rental_type: Optional[str]) -> bool:
+        return True
+```
+
+2. 注册到工厂:
+
+```python
+from platforms.factory import PlatformFactory
+
+PlatformFactory.register("lianjia", LianjiaAdapter)
+```
+
+### 扩展新解析器
+
+创建解析器并添加到责任链:
+
+```python
+from parsers.base import ParserHandler
+
+class FloorParser(ParserHandler):
+    def _do_parse(self, query: str, params: dict) -> dict:
+        # 解析楼层信息
+        match = re.search(r"(\d+)层", query)
+        if match:
+            params["floor"] = int(match.group(1))
+        return params
+    
+    def get_pattern(self) -> str:
+        return "楼层: 5层, 高层, 低层"
+```
+
 ## 工作流程
 
 ### 1. 解析用户输入
 
-调用 `scripts/search_executor.py` 执行完整搜索流程:
 ```bash
-python scripts/search_executor.py "百度科技园附近5km的房源"
+python scripts/main.py "百度科技园附近5km的房源"
+```
+
+或使用 RentalSearchEngine:
+
+```python
+from scripts.main import RentalSearchEngine
+
+engine = RentalSearchEngine()
+result = engine.search("百度科技园附近5km的房源")
 ```
 
 ### 2. 地理定位
@@ -77,7 +183,8 @@ python scripts/search_executor.py "百度科技园附近5km的房源"
 
 **58同城 URL构建规则:**
 ```
-https://{city_code}.58.com/{district}/chuzu/0/{filters}/
+https://{city_code}.58.com/{district}/zufang/0/{filters}/  # 整租
+https://{city_code}.58.com/{district}/hezu/0/{filters}/    # 合租
 
 参数说明:
 - city_code: 城市代码 (如 bj=北京, sh=上海)
@@ -103,26 +210,17 @@ https://{city_code}.58.com/{district}/chuzu/0/{filters}/
 /j3/ = 三室
 ```
 
-**分页URL:**
-```
-/pn2/ = 第2页
-/pn3/ = 第3页
-```
-
 ### 5. 提取房源数据
 
 使用JavaScript在页面中提取数据:
+
 ```javascript
+// 58同城数据提取脚本 (WubaAdapter.get_javascript_extractor())
 Array.from(document.querySelectorAll("li")).filter(li => {
   const h2 = li.querySelector("h2");
   return h2 && (h2.textContent.includes("整租") || h2.textContent.includes("合租"));
 }).map(li => {
-  const h2 = li.querySelector("h2");
-  const title = h2.textContent.trim();
-  const link = h2.querySelector("a");
-  const allText = li.innerText.split("\n");
-  const priceLine = allText.find(t => t.includes("元/月"));
-  // ... 提取完整信息
+  // 提取房源信息...
 });
 ```
 
@@ -156,7 +254,6 @@ Array.from(document.querySelectorAll("li")).filter(li => {
 | 最近地铁站 | 最近的地铁站名称及距离（3km内） |
 | 发布时间 | 房源发布日期 |
 | 链接 | 房源详情页URL |
-| 图片 | 房源缩略图 |
 
 ## 依赖Skills
 
