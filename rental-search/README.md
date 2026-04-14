@@ -70,23 +70,100 @@
 - `合租` - 合租/单间
 - 默认: 不限（搜索所有类型）
 
-## 输出内容
+## 输出格式
 
-### Excel表格字段
+### 1. 搜索配置输出 (JSON)
 
-| 字段 | 说明 |
-|------|------|
-| 标题 | 房源标题 |
-| 类型 | 整租/合租 |
-| 小区 | 小区名称 |
-| 房间数 | 室数 |
-| 面积(㎡) | 平方米 |
-| 租金(元/月) | 月租金 |
-| 距离(km) | 距目标点直线距离 |
-| 最近地铁站 | 最近的地铁站名称及距离（3km内） |
-| 发布时间 | 房源发布日期 |
-| 链接 | 房源详情页URL |
-| 图片 | 房源缩略图 |
+```json
+{
+  "status": "success",
+  "params": {
+    "location": "百度科技园",
+    "radius_km": 5.0,
+    "days": 15,
+    "price_min": null,
+    "price_max": null,
+    "area_min": null,
+    "area_max": null,
+    "rooms": null,
+    "rental_type": null
+  },
+  "location_info": {
+    "name": "百度科技园",
+    "lat": 40.0569,
+    "lng": 116.3015,
+    "district": "海淀"
+  },
+  "search_urls": [
+    {
+      "district": "海淀",
+      "url": "https://bj.58.com/haidian/zufang/0/",
+      "distance": 2.5
+    }
+  ],
+  "javascript_extractor": "Array.from(document.querySelectorAll('li'))...",
+  "created_at": "2026-04-14T17:00:00"
+}
+```
+
+### 2. 房源数据输出 (JSON)
+
+每条房源数据结构：
+
+```json
+{
+  "title": "整租 软件园二期 1室1厅",
+  "price": 3500,
+  "area": 45.0,
+  "location": "西二旗",
+  "community": "软件园二期",
+  "rooms": 1,
+  "rental_type": "整租",
+  "distance": 1.2,
+  "nearest_subway": "西二旗 (800m)",
+  "publish_time": "今天",
+  "url": "https://bj.58.com/...",
+  "image_url": "https://pic.58.com/...",
+  "platform": "wuba"
+}
+```
+
+### 3. Excel 输出
+
+生成文件：`{地点}附近房源.xlsx`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| 标题 | string | 房源标题 |
+| 类型 | string | 整租/合租 |
+| 小区 | string | 小区名称 |
+| 房间数 | int | 室数 |
+| 面积(㎡) | float | 平方米 |
+| 租金(元/月) | int | 月租金 |
+| 距离(km) | float | 距目标点距离 |
+| 最近地铁站 | string | 最近的地铁站名称及距离（3km内） |
+| 发布时间 | string | 房源发布日期 |
+| 链接 | string | 房源详情页URL |
+
+### 4. 错误输出
+
+```json
+{
+  "status": "error",
+  "error_code": "LOCATION_NOT_FOUND",
+  "error_message": "未找到地点: xxx",
+  "suggestion": "请确认地点名称是否正确"
+}
+```
+
+**错误码定义：**
+
+| 错误码 | 说明 | 处理建议 |
+|--------|------|----------|
+| LOCATION_NOT_FOUND | 地点未找到 | 确认地点名称 |
+| NO_LISTINGS | 无符合条件的房源 | 扩大搜索范围 |
+| ANTI_CRAWL | 触发反爬验证 | 点击认证按钮 |
+| NETWORK_ERROR | 网络错误 | 重试请求 |
 
 ## 预设地点
 
@@ -105,24 +182,42 @@
 ### 工作流程
 
 ```
-用户输入 → 解析参数 → 获取坐标 → 确定区域 → 搜索房源 → 过滤排序 → 输出Excel
+用户输入 → 解析参数 → 获取坐标 → 确定区域 → 生成配置 → 输出JSON
 ```
 
-### 文件结构
+### 模块结构
 
 ```
-rental-search/
-├── SKILL.md              # Skill说明文档
-├── README.md             # 使用说明
-└── scripts/
-    └── search_executor.py   # 完整执行脚本
+scripts/
+├── main.py              # 主程序入口
+├── config.py            # 配置管理
+├── models/              # 数据模型
+│   ├── params.py        # SearchParams
+│   └── listing.py       # Listing
+├── parsers/             # 查询解析
+│   ├── base.py          # 解析器基类
+│   └── query_parser.py  # 责任链模式
+├── platforms/           # 平台适配
+│   ├── base.py          # 策略模式
+│   ├── wuba.py          # 58同城
+│   └── factory.py       # 工厂模式
+├── geo/                 # 地理服务
+│   ├── distance.py      # 距离计算
+│   ├── location.py      # 地点服务
+│   └── subway.py        # 地铁站服务
+└── exporters/           # 导出器
+    ├── base.py          # 导出器基类
+    └── excel_exporter.py # Excel导出
 ```
 
-### 依赖
+### 设计模式
 
-- `dumate-browser-use` - 网页抓取
-- `xlsx` - Excel生成
-- `baidu-map-webapi` - 地理定位（可选）
+| 模式 | 应用场景 |
+|------|----------|
+| 责任链模式 | 查询参数解析 |
+| 策略模式 | 平台适配器 |
+| 工厂模式 | 平台创建 |
+| 单例模式 | 配置管理 |
 
 ## 注意事项
 
@@ -130,25 +225,18 @@ rental-search/
 2. **距离计算**: 使用直线距离，实际通勤距离可能不同
 3. **数据时效**: 部分房源可能已下架，建议优先查看最新房源
 4. **区域限制**: 目前仅支持北京地区
-5. **数据源**: 目前仅搜索58同城个人房源，后续将拓展更多平台
+5. **数据源**: 目前仅搜索58同城个人房源
 
 ## 扩展开发
 
 ### 添加新平台
 
-1. 在 `scripts/` 目录下创建平台适配器
-2. 实现 `BasePlatform` 接口:
-   - `build_search_url()` - 构建搜索URL
-   - `parse_list_page()` - 解析列表页
-   - `parse_detail_page()` - 解析详情页
-3. 在 `SKILL.md` 中更新支持平台状态
+1. 创建平台适配器，继承 `PlatformAdapter`
+2. 实现 `build_search_urls()`、`parse_list_page()`、`parse_detail_page()`
+3. 注册到 `PlatformFactory`
 
-### 示例输出
+### 添加新解析器
 
-搜索"百度科技园附近5km的房源"后，生成的Excel示例:
-
-| 标题 | 类型 | 小区 | 房间数 | 面积 | 租金 | 距离 | 发布时间 |
-|------|------|------|--------|------|------|------|----------|
-| 整租 | 软件园二期 1室1厅 | 整租 | 软件园二期 | 1 | 45 | 3500 | 1.2 | 今天 |
-| 整租 | 西二旗地铁站 2室1厅 | 整租 | 西二旗 | 2 | 68 | 4800 | 2.5 | 昨天 |
-| 合租 | 百度科技园旁 | 合租 | 百度科技园 | 3 | 15 | 2200 | 0.8 | 2天前 |
+1. 创建解析器，继承 `ParserHandler`
+2. 实现 `_do_parse()` 方法
+3. 添加到责任链
