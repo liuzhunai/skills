@@ -7,6 +7,7 @@
 | 技能名称 | 描述 | 状态 |
 |----------|------|------|
 | [rental-search](./rental-search) | 租房搜索 - 智能搜索多平台个人房源 | ✅ 可用 |
+| [captcha-solver](./captcha-solver) | 验证码处理 - 通用网页验证码识别与处理 | ✅ 可用 |
 
 ---
 
@@ -55,35 +56,82 @@
 
 ---
 
+## captcha-solver
+
+**验证码处理 Skill**
+
+通用网页验证码处理工具，支持多种验证码类型，采用混合识别方案。
+
+### 支持的验证码类型
+
+| 类型 | 识别方案 | 准确率 |
+|------|----------|--------|
+| 滑动验证码 | OpenCV 本地 | 85%+ |
+| 拼图验证码 | OpenCV 本地 | 80%+ |
+| 文字验证码 | OCR 本地 | 90%+ |
+| 计算验证码 | 本地计算 | 99% |
+| 点击验证码 | AI 视觉 | 70%+ |
+
+### 快速使用
+
+```
+/captcha-solver 处理验证码
+```
+
+### 主要功能
+
+- 自动检测验证码类型
+- 滑动验证码缺口定位
+- 文字验证码 OCR 识别
+- 点击验证码 AI 识别
+- 人类行为模拟（防检测）
+
+### 混合识别方案
+
+| 验证码类型 | 本地处理 | AI 视觉 |
+|------------|----------|---------|
+| 滑动验证码 | ✅ OpenCV | 备选 |
+| 文字验证码 | ✅ OCR | 备选 |
+| 点击验证码 | ❌ | ✅ 必须 |
+
+### 详细文档
+
+查看 [captcha-solver/README.md](./captcha-solver/README.md)
+
+---
+
 ## 目录结构
 
 ```
 skills/
 ├── README.md                    # 本文档
-└── rental-search/               # 租房搜索技能
-    ├── SKILL.md                 # 技能定义
-    ├── README.md                # 使用说明
-    └── scripts/                 # 脚本目录
-        ├── __init__.py          # 包入口
-        ├── main.py              # 主程序入口
-        ├── config.py            # 配置管理(单例)
-        ├── models/              # 数据模型
-        │   ├── params.py        # 搜索参数
-        │   └── listing.py       # 房源模型
-        ├── parsers/             # 查询解析(责任链)
-        │   ├── base.py          # 解析器基类
-        │   └── query_parser.py  # 查询解析器
-        ├── platforms/           # 平台适配(策略/工厂)
-        │   ├── base.py          # 适配器基类
-        │   ├── wuba.py          # 58同城实现
-        │   └── factory.py       # 平台工厂
-        ├── geo/                 # 地理服务
-        │   ├── distance.py      # 距离计算
-        │   ├── location.py      # 地点服务
-        │   └── subway.py        # 地铁站服务
-        └── exporters/           # 导出器
-            ├── base.py          # 导出器基类
-            └── excel_exporter.py # Excel导出
+├── rental-search/               # 租房搜索技能
+│   ├── SKILL.md
+│   ├── README.md
+│   └── scripts/
+│       ├── main.py              # 主程序入口
+│       ├── models/              # 数据模型
+│       ├── parsers/             # 查询解析
+│       ├── platforms/           # 平台适配
+│       ├── geo/                 # 地理服务
+│       └── exporters/           # 导出器
+└── captcha-solver/              # 验证码处理技能
+    ├── SKILL.md
+    ├── README.md
+    └── scripts/
+        ├── solver.py            # 主入口
+        ├── detector.py          # 类型检测
+        ├── recognizers/         # 识别器
+        │   ├── slider.py        # 滑动验证码
+        │   ├── text.py          # 文字验证码
+        │   └── click.py         # 点击验证码
+        ├── executors/           # 执行器
+        │   ├── click.py
+        │   ├── drag.py
+        │   └── input.py
+        └── utils/               # 工具
+            ├── image.py         # 图像处理
+            └── humanize.py      # 行为模拟
 ```
 
 ## 开发规范
